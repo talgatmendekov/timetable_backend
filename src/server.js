@@ -105,6 +105,7 @@ app.use('/api/teachers',         teacherRoutes);
 app.use('/api/groups',           groupRoutes);           // ← plain string array
 app.use('/api/group-channels',   groupChannelRoutes);    // ← {group_name, chat_id}
 app.use('/api/broadcast',        broadcastRoutes);
+app.use('/api/announcements', require('./routes/announcementRoutes'));
 
 const settingsRoutes = require('./routes/settingsRoutes');
 app.use('/api/settings', settingsRoutes);
