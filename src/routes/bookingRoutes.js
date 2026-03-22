@@ -19,28 +19,48 @@ pool.query('ALTER TABLE schedules        ALTER COLUMN time       TYPE VARCHAR(20
 
 const deleteExpired = async () => {
   try {
+    // end_time is stored as "HH:MM-HH:MM" (full slot string) — extract just the end part
+    // e.g. "08:00-08:40" → end is "08:40"
+    // Also handle plain "08:40" format
     const expired = await pool.query(`
-      SELECT id, entity, name, day, start_time, room FROM booking_requests
+      SELECT id, entity, name, day, start_time, end_time, room FROM booking_requests
       WHERE status = 'approved'
         AND end_time IS NOT NULL AND end_time != ''
         AND EXTRACT(DOW FROM NOW()) = CASE day
           WHEN 'Monday'    THEN 1 WHEN 'Tuesday'   THEN 2 WHEN 'Wednesday' THEN 3
           WHEN 'Thursday'  THEN 4 WHEN 'Friday'    THEN 5 WHEN 'Saturday'  THEN 6
           ELSE 0 END
-        AND end_time::time < NOW()::time
     `);
 
+    const now = new Date();
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+
     for (const b of expired.rows) {
+      // Parse end time — handle both "08:40" and "08:00-08:40" formats
+      const rawEnd = String(b.end_time).includes('-')
+        ? String(b.end_time).split('-').pop().trim()
+        : String(b.end_time).trim();
+      const [endH, endM] = rawEnd.split(':').map(Number);
+      if (isNaN(endH) || isNaN(endM)) continue;
+      const endMins = endH * 60 + endM;
+
+      if (nowMins < endMins) continue; // not expired yet
+
       const groupName = (b.entity && b.entity.trim()) ? b.entity.trim() : (b.name || 'Booking');
       await pool.query(
         `DELETE FROM schedules WHERE group_name=$1 AND day=$2 AND time=$3 AND room=$4`,
         [groupName, b.day, b.start_time, b.room]
       );
       await pool.query(`DELETE FROM booking_requests WHERE id=$1`, [b.id]);
-      console.log(`Auto-expired booking: ${groupName} ${b.day} ${b.start_time}-${b.room}`);
+      console.log(`Auto-expired booking: ${groupName} ${b.day} ${b.start_time} → ${rawEnd}`);
     }
   } catch(e) { console.error('Auto-expire:', e.message); }
 };
+
+// ── Run auto-expire every 5 minutes independently (no need for a GET request) ─
+setInterval(deleteExpired, 5 * 60 * 1000);
+// Also run once on startup
+deleteExpired().catch(() => {});
 
 const notifyAdmin = async (b) => {
   try {
@@ -163,12 +183,33 @@ router.put('/:id', authenticateToken, async (req,res) => {
 // ── DELETE booking ───────────────────────────────────────────────────────────
 router.delete('/:id', authenticateToken, async (req,res) => {
   try {
-    const r = await pool.query(
-      'DELETE FROM booking_requests WHERE id=$1 RETURNING id',
+    // Fetch first so we know what to clean up from schedules
+    const found = await pool.query(
+      'SELECT * FROM booking_requests WHERE id=$1',
       [req.params.id]
     );
-    if (r.rowCount === 0)
+    if (found.rowCount === 0)
       return res.status(404).json({ success:false, error:'Not found' });
+
+    const b = found.rows[0];
+    const groupName = (b.entity && b.entity.trim()) ? b.entity.trim() : (b.name || 'Booking');
+
+    // Remove from schedules (approved bookings live there)
+    await pool.query(
+      `DELETE FROM schedules WHERE group_name=$1 AND day=$2 AND time=$3 AND room=$4`,
+      [groupName, b.day, b.start_time, b.room]
+    ).catch(()=>{});
+
+    // Clean up the auto-created group if it has no more schedules
+    await pool.query(
+      `DELETE FROM groups WHERE name=$1
+       AND NOT EXISTS (SELECT 1 FROM schedules WHERE group_name=$1)`,
+      [groupName]
+    ).catch(()=>{});
+
+    // Delete the booking record itself
+    await pool.query('DELETE FROM booking_requests WHERE id=$1', [req.params.id]);
+
     res.json({ success:true });
   } catch(err) {
     res.status(500).json({ success:false, error:err.message });
