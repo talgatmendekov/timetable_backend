@@ -1,5 +1,4 @@
 // src/controllers/scheduleController.js
-
 const Schedule = require('../models/Schedule');
 const Group = require('../models/Group');
 
@@ -10,80 +9,61 @@ class ScheduleController {
       res.json(schedules);
     } catch (error) {
       console.error('Get all schedules error:', error);
-      res.status(500).json({ 
-        success: false,
-        error: 'Server error fetching schedules' 
-      });
+      res.status(500).json({ success: false, error: 'Server error fetching schedules' });
     }
   }
 
   static async createOrUpdate(req, res) {
     try {
-      const { group, day, time, course, teacher, room } = req.body;
+      const { group, day, time, course, teacher, room, subjectType, duration, meetingLink } = req.body;
 
       // Verify group exists
       const groupExists = await Group.exists(group);
       if (!groupExists) {
-        return res.status(400).json({ 
-          success: false,
-          error: 'Group does not exist' 
-        });
+        return res.status(400).json({ success: false, error: 'Group does not exist' });
       }
 
-      // Upsert schedule
       const schedule = await Schedule.upsert(
-        group, 
-        day, 
-        time, 
-        course, 
-        teacher || null, 
-        room || null
+        group, day, time, course,
+        teacher     || null,
+        room        || null,
+        subjectType || 'lecture',
+        duration    || 1,
+        meetingLink || ''
       );
 
       res.json({
         success: true,
         data: {
-          id: schedule.id,
-          group: schedule.group_name,
-          day: schedule.day,
-          time: schedule.time,
-          course: schedule.course,
-          teacher: schedule.teacher,
-          room: schedule.room
+          id:          schedule.id,
+          group:       schedule.group_name,
+          day:         schedule.day,
+          time:        schedule.time,
+          course:      schedule.course,
+          teacher:     schedule.teacher,
+          room:        schedule.room,
+          subjectType: schedule.subject_type,
+          duration:    schedule.duration,
+          meetingLink: schedule.meeting_link,
         }
       });
     } catch (error) {
       console.error('Create/Update schedule error:', error);
-      res.status(500).json({ 
-        success: false,
-        error: 'Server error saving schedule' 
-      });
+      res.status(500).json({ success: false, error: 'Server error saving schedule' });
     }
   }
 
   static async delete(req, res) {
     try {
       const { group, day, time } = req.params;
-
       const deleted = await Schedule.delete(group, day, time);
-      
       if (!deleted) {
-        return res.status(404).json({ 
-          success: false,
-          error: 'Schedule entry not found' 
-        });
+        return res.status(404).json({ success: false, error: 'Schedule entry not found' });
       }
-
-      res.json({ 
-        success: true,
-        message: 'Schedule deleted successfully' 
-      });
+      res.json({ success: true, message: 'Schedule deleted successfully' });
     } catch (error) {
       console.error('Delete schedule error:', error);
-      res.status(500).json({ 
-        success: false,
-        error: 'Server error deleting schedule' 
-      });
+      res.status(500).json({ success: false, error: 'Server error deleting schedule' });
     }
   }
 
@@ -94,10 +74,7 @@ class ScheduleController {
       res.json(schedules);
     } catch (error) {
       console.error('Get by day error:', error);
-      res.status(500).json({ 
-        success: false,
-        error: 'Server error fetching schedules by day' 
-      });
+      res.status(500).json({ success: false, error: 'Server error fetching schedules by day' });
     }
   }
 
@@ -108,10 +85,7 @@ class ScheduleController {
       res.json(schedules);
     } catch (error) {
       console.error('Get by teacher error:', error);
-      res.status(500).json({ 
-        success: false,
-        error: 'Server error fetching schedules by teacher' 
-      });
+      res.status(500).json({ success: false, error: 'Server error fetching schedules by teacher' });
     }
   }
 
@@ -122,10 +96,7 @@ class ScheduleController {
       res.json(schedules);
     } catch (error) {
       console.error('Get by group error:', error);
-      res.status(500).json({ 
-        success: false,
-        error: 'Server error fetching schedules by group' 
-      });
+      res.status(500).json({ success: false, error: 'Server error fetching schedules by group' });
     }
   }
 
@@ -135,10 +106,7 @@ class ScheduleController {
       res.json(teachers);
     } catch (error) {
       console.error('Get all teachers error:', error);
-      res.status(500).json({ 
-        success: false,
-        error: 'Server error fetching teachers' 
-      });
+      res.status(500).json({ success: false, error: 'Server error fetching teachers' });
     }
   }
 }
