@@ -55,14 +55,21 @@ const runMigrations = async () => {
     // 4. Create teachers table if missing
     await client.query(`
       CREATE TABLE IF NOT EXISTS teachers (
-        id          SERIAL PRIMARY KEY,
-        name        VARCHAR(100) NOT NULL,
-        telegram_id VARCHAR(50),
-        created_at  TIMESTAMPTZ DEFAULT NOW()
+        id                    SERIAL PRIMARY KEY,
+        name                  VARCHAR(100) NOT NULL,
+        telegram_id           VARCHAR(50),
+        notifications_enabled BOOLEAN DEFAULT true,
+        created_at            TIMESTAMPTZ DEFAULT NOW()
       )
     `);
 
-    // 5. Create group_channels table if missing
+    // 5. Add notifications_enabled to teachers if column is missing
+    await client.query(`
+      ALTER TABLE teachers
+        ADD COLUMN IF NOT EXISTS notifications_enabled BOOLEAN DEFAULT true;
+    `);
+
+    // 6. Create group_channels table if missing
     await client.query(`
       CREATE TABLE IF NOT EXISTS group_channels (
         id         SERIAL PRIMARY KEY,
@@ -72,7 +79,7 @@ const runMigrations = async () => {
       )
     `);
 
-    // 6. Create broadcast_log table if missing
+    // 7. Create broadcast_log table if missing
     await client.query(`
       CREATE TABLE IF NOT EXISTS broadcast_log (
         id              SERIAL PRIMARY KEY,
@@ -83,6 +90,22 @@ const runMigrations = async () => {
         failed_count    INT,
         created_at      TIMESTAMPTZ DEFAULT NOW()
       )
+    `);
+
+    // 8. Create app_settings table if missing
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key        VARCHAR(100) PRIMARY KEY,
+        value      TEXT,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // 9. Insert default notifications_enabled setting if not exists
+    await client.query(`
+      INSERT INTO app_settings (key, value)
+      VALUES ('notifications_enabled', 'true')
+      ON CONFLICT (key) DO NOTHING;
     `);
 
     console.log('✅ Migrations complete');
