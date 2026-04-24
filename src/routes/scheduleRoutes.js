@@ -8,20 +8,27 @@ const pool = require('../config/database');
 function getNotifier() {
   try {
     if (!process.env.TELEGRAM_BOT_TOKEN) return null;
-    return require('../services/telegramNotifier').getInstance();
+    const { getNotifier: getCronNotifier } = require('../services/telegramCron');
+    const notifier = getCronNotifier();
+    if (!notifier) console.warn('⚠️ Telegram notifier not ready yet');
+    return notifier;
   } catch (e) {
+    console.error('⚠️ TelegramNotifier failed to load:', e.message);
     return null;
   }
 }
 
 function notify(changeType, classData, oldData = null) {
   const notifier = getNotifier();
-  if (!notifier) return;
+  if (!notifier) {
+    console.warn('⚠️ notify() skipped — notifier not available');
+    return;
+  }
+  console.log(`📨 Sending ${changeType} notification for ${classData.course} (${classData.group})`);
   notifier.notifyScheduleChange(changeType, classData, oldData).catch(err => {
     console.error('Telegram notify error:', err.message);
   });
 }
-
 // ── GET all schedules ────────────────────────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
