@@ -19,13 +19,16 @@ const scheduleRoutes     = require('./routes/scheduleRoutes');
 const bookingRoutes      = require('./routes/bookingRoutes');
 const teacherRoutes      = require('./routes/teacherRoutes');
 const groupChannelRoutes = require('./routes/groupChannelRoutes');
-const groupRoutes        = require('./routes/groupRoutes');        // ← NEW
+const groupRoutes        = require('./routes/groupRoutes');
 const broadcastRoutes    = require('./routes/broadcastRoutes');
 
-let startTelegramNotifications = null;
+// ── Load Telegram — only via telegramCron, never telegramNotifier directly ────
+let startTelegramNotifications  = null;
+let stopTelegramNotifications   = null;
 try {
   const telegram = require('./services/telegramCron');
   startTelegramNotifications = telegram.startTelegramNotifications;
+  stopTelegramNotifications  = telegram.stopTelegramNotifications;
   console.log('📦 Telegram module loaded successfully');
 } catch (error) {
   console.error('⚠️ Could not load Telegram modules:', error.message);
@@ -85,7 +88,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// ── Run urgent migrations on startup ─────────────────────────────────────────
+// ── Run urgent migrations on startup ──────────────────────────────────────────
 (async () => {
   try {
     const pool = require('./config/database');
@@ -102,10 +105,10 @@ app.use('/api/auth',             authRoutes);
 app.use('/api/schedules',        scheduleRoutes);
 app.use('/api/booking-requests', bookingRoutes);
 app.use('/api/teachers',         teacherRoutes);
-app.use('/api/groups',           groupRoutes);           // ← plain string array
-app.use('/api/group-channels',   groupChannelRoutes);    // ← {group_name, chat_id}
+app.use('/api/groups',           groupRoutes);
+app.use('/api/group-channels',   groupChannelRoutes);
 app.use('/api/broadcast',        broadcastRoutes);
-app.use('/api/announcements', require('./routes/announcementRoutes'));
+app.use('/api/announcements',    require('./routes/announcementRoutes'));
 
 const settingsRoutes = require('./routes/settingsRoutes');
 app.use('/api/settings', settingsRoutes);
@@ -166,6 +169,7 @@ app.use('/api/claude', claudeRoutes);
 const publicScheduleRoute = require('./routes/publicScheduleRoute');
 app.use('/schedule', publicScheduleRoute);
 
+// ── Telegram webhook handler ───────────────────────────────────────────────────
 let _telegramWebhookMiddleware = null;
 let _telegramWebhookPath       = null;
 app.use((req, res, next) => {
@@ -207,15 +211,16 @@ const server = app.listen(PORT, () => {
     setTimeout(() => {
       try {
         startTelegramNotifications();
-        try {
-          const { getNotifier } = require('./services/telegramCron');
-          setTimeout(() => {
+        // Register webhook route after bot initializes
+        setTimeout(() => {
+          try {
+            const { getNotifier } = require('./services/telegramCron');
             const notifier = getNotifier();
             if (notifier?.webhookMiddleware && notifier?.webhookPath) {
               app.setTelegramWebhook(notifier.webhookPath, notifier.webhookMiddleware);
             }
-          }, 1000);
-        } catch(e) { /* ignore */ }
+          } catch(e) { /* ignore */ }
+        }, 2000);
       } catch (error) {
         console.error('❌ Failed to start Telegram service:', error.message);
       }
@@ -225,13 +230,16 @@ const server = app.listen(PORT, () => {
   }
 });
 
+// ── Graceful shutdown — only use telegramCron, never telegramNotifier ─────────
 const shutdown = (signal) => {
   console.log(`${signal} received: closing HTTP server`);
-  try {
-    const notifier = require('./services/telegramNotifier');
-    const instance = notifier.getInstance ? notifier.getInstance() : null;
-    if (instance?.bot) { instance.bot.stop(signal); console.log('Telegram bot stopped'); }
-  } catch(e) { }
+  // ✅ Use telegramCron's stop — avoids creating a second bot instance
+  if (stopTelegramNotifications) {
+    try {
+      stopTelegramNotifications();
+      console.log('Telegram bot stopped');
+    } catch(e) { }
+  }
   server.close(() => { console.log('HTTP server closed'); process.exit(0); });
   setTimeout(() => process.exit(1), 5000);
 };
