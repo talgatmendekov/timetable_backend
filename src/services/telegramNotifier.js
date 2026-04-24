@@ -17,9 +17,10 @@ class TelegramNotifier {
   setupBot() {
     if (!this.bot) return; // no token — skip
 
-    const webhookDomain = process.env.RAILWAY_PUBLIC_DOMAIN
+    const webhookDomain = process.env.WEBHOOK_DOMAIN
+  || (process.env.RAILWAY_PUBLIC_DOMAIN
       ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
-      : process.env.WEBHOOK_DOMAIN || null;
+      : null);
 
     if (webhookDomain) {
       // ── WEBHOOK MODE — no polling, no 409 conflicts ──────────────────────
