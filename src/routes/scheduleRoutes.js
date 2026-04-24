@@ -87,8 +87,7 @@ async function notify(changeType, classData, oldData = null) {
   const { group } = classData;
   try {
     const { rows } = await pool.query(
-      `SELECT chat_id FROM group_channels
-       WHERE LOWER(TRIM(group_name)) = LOWER(TRIM($1))`,
+      `SELECT chat_id FROM group_channels WHERE group_name = $1`,
       [group]
     );
     if (rows.length > 0 && rows[0].chat_id) {
