@@ -1,35 +1,108 @@
 // routes/scheduleRoutes.js
 const express = require('express');
-const router = express.Router();
+const router  = express.Router();
+const https   = require('https');
 const { authenticateToken } = require('../middleware/auth');
 const pool = require('../config/database');
 
-// ── Telegram notifier (optional — won't crash if bot not configured) ─────────
-function getNotifier() {
+// ── Send Telegram message (same as broadcastRoutes — proven to work) ──────────
+async function sendMsg(chatId, text) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+
+  let normalizedChatId = chatId;
+  if (typeof chatId === 'string' && !chatId.startsWith('@')) {
+    const num = parseInt(chatId);
+    if (!isNaN(num)) normalizedChatId = num;
+  }
+
+  const bodyStr = JSON.stringify({
+    chat_id:    normalizedChatId,
+    text,
+    parse_mode: 'HTML',
+  });
+
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'api.telegram.org',
+      path:     `/bot${token}/sendMessage`,
+      method:   'POST',
+      headers:  {
+        'Content-Type':   'application/json',
+        'Content-Length': Buffer.byteLength(bodyStr),
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const result = JSON.parse(data);
+          if (result.ok) {
+            console.log(`✅ Notification sent to ${normalizedChatId}`);
+          } else {
+            console.error(`❌ Notification failed:`, result.description);
+          }
+        } catch (e) {
+          console.error('Notification parse error:', e.message);
+        }
+        resolve();
+      });
+    });
+    req.on('error', (e) => {
+      console.error('Notification request error:', e.message);
+      resolve();
+    });
+    req.write(bodyStr);
+    req.end();
+  });
+}
+
+// ── Build notification message ────────────────────────────────────────────────
+function buildMsg(changeType, data, oldData) {
+  const { day, time, course, teacher, room, duration } = data;
+  const dur    = duration > 1 ? ` (${duration * 40} min)` : '';
+  const base   = `📚 <b>${course}</b>\n👨‍🏫 Lecturer: ${teacher || 'TBA'}\n📅 ${day}  ⏰ ${time}${dur}\n🏫 Room: ${room || 'TBA'}`;
+  const header = `🏛 <b>Alatoo International University</b>\n<i>Faculty Administration</i>\n━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+  const footer = `\n\n━━━━━━━━━━━━━━━━━━━━━━\n<i>— Faculty Administration</i>`;
+
+  if (changeType === 'added')
+    return `${header}📅 <b>New Class Added</b>\n\n${base}${footer}`;
+  if (changeType === 'deleted')
+    return `${header}🗑 <b>Class Cancelled</b>\n\n${base}${footer}`;
+
+  // updated — show diff
+  const fields = { course: '📚 Course', room: '🏫 Room', day: '📅 Day', time: '⏰ Time', teacher: '👨‍🏫 Teacher' };
+  const diff = oldData
+    ? Object.entries(fields)
+        .filter(([k]) => oldData[k] !== data[k])
+        .map(([k, label]) => `  ${label}: ${oldData[k] || '—'} → ${data[k] || '—'}`)
+        .join('\n')
+    : '';
+  return `${header}✏️ <b>Schedule Update</b>\n\n${base}${diff ? `\n\n<b>Changes:</b>\n${diff}` : ''}${footer}`;
+}
+
+// ── Notify group channel ──────────────────────────────────────────────────────
+async function notify(changeType, classData, oldData = null) {
+  if (!process.env.TELEGRAM_BOT_TOKEN) return;
+  const { group } = classData;
   try {
-    if (!process.env.TELEGRAM_BOT_TOKEN) return null;
-    const { getNotifier: getCronNotifier } = require('../services/telegramCron');
-    const notifier = getCronNotifier();
-    if (!notifier) console.warn('⚠️ Telegram notifier not ready yet');
-    return notifier;
+    const { rows } = await pool.query(
+      `SELECT chat_id FROM group_channels
+       WHERE LOWER(TRIM(group_name)) = LOWER(TRIM($1))`,
+      [group]
+    );
+    if (rows.length > 0 && rows[0].chat_id) {
+      await sendMsg(rows[0].chat_id, buildMsg(changeType, classData, oldData));
+      console.log(`📨 Notified group channel: ${group}`);
+    } else {
+      console.warn(`⚠️ No channel found for group: "${group}"`);
+    }
   } catch (e) {
-    console.error('⚠️ TelegramNotifier failed to load:', e.message);
-    return null;
+    console.error('notify error:', e.message);
   }
 }
 
-function notify(changeType, classData, oldData = null) {
-  const notifier = getNotifier();
-  if (!notifier) {
-    console.warn('⚠️ notify() skipped — notifier not available');
-    return;
-  }
-  console.log(`📨 Sending ${changeType} notification for ${classData.course} (${classData.group})`);
-  notifier.notifyScheduleChange(changeType, classData, oldData).catch(err => {
-    console.error('Telegram notify error:', err.message);
-  });
-}
-// ── GET all schedules ────────────────────────────────────────────────────────
+// ── GET all schedules ─────────────────────────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
     const result = await pool.query(
@@ -44,10 +117,10 @@ router.get('/', async (req, res) => {
         day:         row.day,
         time:        row.time,
         course:      row.course,
-        teacher:     row.teacher || '',
-        room:        row.room || '',
+        teacher:     row.teacher     || '',
+        room:        row.room        || '',
         subjectType: row.subject_type || 'lecture',
-        duration:    row.duration || 1,
+        duration:    row.duration    || 1,
       };
     });
     res.json(schedule);
@@ -57,26 +130,26 @@ router.get('/', async (req, res) => {
   }
 });
 
-// ── POST save/upsert one class ───────────────────────────────────────────────
+// ── POST save/upsert one class ────────────────────────────────────────────────
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const { group, day, time, course, teacher, room, subjectType, duration } = req.body;
     if (!group || !day || !time || !course)
       return res.status(400).json({ success: false, error: 'group, day, time, course are required' });
 
-    // Check if class already exists (added vs updated)
+    // Check if already exists (added vs updated)
     const existing = await pool.query(
       `SELECT course, teacher, room, subject_type, duration FROM schedules
        WHERE group_name=$1 AND day=$2 AND time=$3`,
       [group, day, time]
     );
     const isUpdate = existing.rows.length > 0;
-    const oldData = isUpdate ? {
+    const oldData  = isUpdate ? {
       group, day, time,
-      course:      existing.rows[0].course,
-      teacher:     existing.rows[0].teacher || '',
-      room:        existing.rows[0].room || '',
-      duration:    existing.rows[0].duration || 1,
+      course:   existing.rows[0].course,
+      teacher:  existing.rows[0].teacher  || '',
+      room:     existing.rows[0].room     || '',
+      duration: existing.rows[0].duration || 1,
     } : null;
 
     await pool.query(
@@ -102,7 +175,7 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
-// ── POST /bulk ───────────────────────────────────────────────────────────────
+// ── POST /bulk ────────────────────────────────────────────────────────────────
 router.post('/bulk', authenticateToken, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -126,7 +199,10 @@ router.post('/bulk', authenticateToken, async (req, res) => {
 
     await client.query('BEGIN');
     for (const name of groupNames) {
-      await client.query(`INSERT INTO groups (name) VALUES ($1) ON CONFLICT (name) DO NOTHING`, [name]);
+      await client.query(
+        `INSERT INTO groups (name) VALUES ($1) ON CONFLICT (name) DO NOTHING`,
+        [name]
+      );
     }
     let inserted = 0;
     for (const e of entries) {
@@ -152,14 +228,13 @@ router.post('/bulk', authenticateToken, async (req, res) => {
   }
 });
 
-// ── DELETE one class ─────────────────────────────────────────────────────────
+// ── DELETE one class ──────────────────────────────────────────────────────────
 router.delete('/', authenticateToken, async (req, res) => {
   try {
     const { group, day, time } = req.body;
     if (!group || !day || !time)
       return res.status(400).json({ success: false, error: 'group, day, time are required' });
 
-    // Fetch before deleting so we can notify
     const existing = await pool.query(
       `SELECT course, teacher, room, duration FROM schedules
        WHERE group_name=$1 AND day=$2 AND time=$3`,
@@ -173,7 +248,13 @@ router.delete('/', authenticateToken, async (req, res) => {
 
     if (existing.rows.length > 0) {
       const r = existing.rows[0];
-      notify('deleted', { group, day, time, course: r.course, teacher: r.teacher || '', room: r.room || '', duration: r.duration || 1 });
+      notify('deleted', {
+        group, day, time,
+        course:   r.course,
+        teacher:  r.teacher  || '',
+        room:     r.room     || '',
+        duration: r.duration || 1,
+      });
     }
 
     res.json({ success: true });
