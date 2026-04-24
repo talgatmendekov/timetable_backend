@@ -23,6 +23,8 @@ router.get('/', async (req, res) => {  // public — guests need group list too
       pool.query('SELECT * FROM group_channels ORDER BY group_name'),
     ]);
 
+
+    console.log('group_channels raw:', JSON.stringify(channelsResult.rows));
     const channelMap = {};
     channelsResult.rows.forEach(r => { channelMap[r.group_name] = r.chat_id; });
 
